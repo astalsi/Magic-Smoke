@@ -6,6 +6,9 @@
 #include <limits.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
 
 static bool verbose=false;
 
@@ -13,7 +16,7 @@ static bool verbose=false;
  * How do I get used?
  */
 void usage(void) {
-	printf("magicSmoke - Random access hdparm\n");
+	printf("magicSmoke - Random access disk speed tester\n");
 	printf("magicSmoke (-r|-w|-rw) [options] (file)\n");
 	printf("magicSmoke perfomrs operations in the file specified by file.  If file exists and is not a block device, magicSmoke fails.  If file does not exist, it is created\n");
 	printf("-r,--read	perform random reads\n");
@@ -34,7 +37,7 @@ bool makeFile(char * filename, int size) {
 
 void get_options(int argc, char **argv, bool *read, bool *write, 
 	unsigned int *size, unsigned int *rawsize, unsigned int  *actions, 
-	unsigned int *rwsize, char *file) {
+	unsigned int *rwsize, char **file) {
 	
 	//give some reasonable defaults for things
 	*read=false;
@@ -104,11 +107,61 @@ void get_options(int argc, char **argv, bool *read, bool *write,
 		exit(EXIT_FAILURE);
 	}
 	
-	file=argv[optind];
+	*file=argv[optind];
 	
 	if (verbose) {
-		printf("Arguments from getopt:\n\tVerbose: %i\n\tDo writes:%i\n\tDo reads: %i\n\tRead-Write sizeL %i\n\tSize: %u\n\tRawsize: %u\n\tActions: %u\n\tFile: %s\n"
-		, verbose, (int)*write, (int)*read, *rwsize, *size, *rawsize, *actions,file);
+		printf("Arguments from getopt:\n\tVerbose: %i\n\tDo writes:%i\n\tDo reads: %i\n\tRead-Write size: %i bytes\n\tSize: %u blocks\n\tRawsize: %u bytes\n\tActions: %u\n\tFile: %s\n"
+		, verbose, (int)*write, (int)*read, *rwsize, *size, *rawsize, *actions,*file);
+	}
+}
+
+bool file_exists(char * file, int perms) {
+	errno=0;
+	int ifile;
+	if(-1==(ifile=open(file, perms))) {
+		if (errno==ENOENT) {
+			//whoo! no file!
+			return false;
+		} else
+		if (errno==EACCES) {
+			printf("Access denied to %s.  You probably need to be root to write to a block device...\n",file);
+			exit(EXIT_FAILURE);
+		} else {
+			printf("An error occurred: %s\n", strerror(errno));
+			exit(EXIT_FAILURE);
+		}
+	}
+	close(ifile);
+	return true;
+}
+
+bool is_block_device(char *file) {
+	errno=0;
+	struct stat stats;
+	
+	if(-1==stat(file, &stats)) {
+		printf("An error occurred: %s\n",strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	
+	if (S_ISBLK(stats.st_mode)) {
+		if (verbose)
+			printf("Block size is %i\n",(int)stats.st_blksize);
+		return true;
+	} else {
+		return false;
+	}
+}
+
+int parse_perms(bool read, bool write) {
+	if (read && write) {
+		return O_RDWR;
+	} else if (read) {
+		return O_RDONLY;
+	} else if (write) {
+		return O_WRONLY;
+	} else {
+		return 0; //what are you doing?
 	}
 }
 
@@ -124,12 +177,22 @@ int main(int argc, char **argv) {
 	char *file=NULL;
 	//Parse arguments
 	get_options(argc, argv, &read, &write, &size, &rawsize,
-		&actions, &rwsize, file);
+		&actions, &rwsize, &file);
+	
+	//do some sanity checks
+	if (!(read || write)) {
+		printf("You must specify one of read or write! (or both)\n");
+		usage();
+		exit(EXIT_FAILURE);
+	}
+	
+	//parse out what permissions we want on the file when we open it
+	int perms = parse_perms(read,write);
 	
 	//represents the size of this file, as the FS sees it
 	unsigned long realsize;
 	//If using files, create file or fail
-	if (file_exists(file)) {
+	if (file_exists(file,perms)) {
 		if (!is_block_device(file)) {
 			printf("File %s already exists! I refuse to overwrite an existing file!\n\n",file);
 			usage();
@@ -137,20 +200,20 @@ int main(int argc, char **argv) {
 			//dont want to overwrite a file
 		}
 		//file is a block device.  We'll get size to use
-		get_block_device_size(file);
+		//get_block_device_size(file);
 		
 		//lets give a final chance to back out...
-		last_chance();
+		//last_chance();
 	} else {
 		//create a file
-		if (rawsize!=0) {
+		/*if (rawsize!=0) {
 			//use rawsize
 			realsize=rawsize;
 		} else {
 			//get system blocksize
 			realsize=get_block_size(file) * size;
 		}
-		make_file(realsize);
+		make_file(realsize);*/
 	}
 	//mark already run time
 	//Do random reads/writes
