@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
+#include <libgen.h>
 
 static bool verbose=false;
 
@@ -147,6 +148,7 @@ bool is_block_device(char *file) {
 	if (S_ISBLK(stats.st_mode)) {
 		if (verbose)
 			printf("Block size is %i\n",(int)stats.st_blksize);
+			printf("Size of disk: %i\n", (int)stats.st_blocks * 512);
 		return true;
 	} else {
 		return false;
@@ -163,6 +165,39 @@ int parse_perms(bool read, bool write) {
 	} else {
 		return 0; //what are you doing?
 	}
+}
+
+int get_block_size(char *file) {
+	struct stat stats;
+	
+	errno=0;
+	
+	if(-1==stat(dirname(file), &stats)) {
+		printf("magicSmoke: get_block_size(): %s with filename %s\n",strerror(errno),dirname(file));
+		exit(EXIT_FAILURE);
+	}
+	
+	return (int)stats.st_blksize;
+}
+
+bool make_file(char * file, unsigned int size) {
+	errno=0;
+	
+	int fp;
+	if (-1==(fp=open(file, O_RDWR|O_CREAT|O_EXCL))) {
+		printf("magicSmoke: make_file(): %s\n",strerror(errno));
+	}
+	
+	int crand=0;
+	for (unsigned int i=0; i<size; i+=sizeof(int)) {
+		crand=rand();
+		if (-1==write(fp, &crand, sizeof(int))) {
+			printf("magicSmoke: make_file(): %s\nYou'll probably want to manually clean up test file %s\n",strerror(errno),file);
+			exit(EXIT_FAILURE);
+		}
+	}
+	
+	return true;
 }
 
 int main(int argc, char **argv) {
@@ -206,15 +241,21 @@ int main(int argc, char **argv) {
 		//last_chance();
 	} else {
 		//create a file
-		/*if (rawsize!=0) {
+		if (rawsize!=0) {
 			//use rawsize
 			realsize=rawsize;
 		} else {
 			//get system blocksize
 			realsize=get_block_size(file) * size;
 		}
-		make_file(realsize);*/
+		if (verbose)
+			printf("Writing %lu bytes to %s...",realsize,file);
+		//make_file(file, realsize);
+		if (verbose)
+			printf(" Done!\n");
 	}
+	
+	//finally actually open our file
 	//mark already run time
 	//Do random reads/writes
 	//calculate result for both real and process time
