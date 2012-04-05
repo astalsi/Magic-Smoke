@@ -10,6 +10,9 @@
 #include <fcntl.h>
 #include <string.h>
 #include <libgen.h>
+#include <sys/ioctl.h>
+#include <linux/fs.h>
+#include <time.h>
 
 static bool verbose=false;
 
@@ -27,13 +30,6 @@ void usage(void) {
 	printf("-z #,--raw-size=#	if a file is created, make it of # bytes\n");
 	printf("-a # --actions=#	perform # reads/writes [default: %u]\n", UINT_MAX);
 	printf("-v, --verbose	write out progress output as we run\n");
-}
-
-/**
- * Make a file to do reads and/or writes to
- */
-bool makeFile(char * filename, int size) {
-	return false;
 }
 
 void get_options(int argc, char **argv, bool *read, bool *write, 
@@ -146,9 +142,6 @@ bool is_block_device(char *file) {
 	}
 	
 	if (S_ISBLK(stats.st_mode)) {
-		if (verbose)
-			printf("Block size is %i\n",(int)stats.st_blksize);
-			printf("Size of disk: %i\n", (int)stats.st_blocks * 512);
 		return true;
 	} else {
 		return false;
@@ -167,37 +160,118 @@ int parse_perms(bool read, bool write) {
 	}
 }
 
-int get_block_size(char *file) {
+unsigned long get_block_size(char *file) {
 	struct stat stats;
 	
 	errno=0;
 	
-	if(-1==stat(dirname(file), &stats)) {
-		printf("magicSmoke: get_block_size(): %s with filename %s\n",strerror(errno),dirname(file));
+	char *mfile;
+	
+	if(!(mfile = calloc(strlen(file),sizeof(char)))) {
+		printf("magicSmoke: get_block_size(): %s\n",strerror(errno));
 		exit(EXIT_FAILURE);
 	}
+	
+	strcpy(mfile,file);
+	mfile = dirname(mfile);
+	
+	if(-1==stat(mfile, &stats)) {
+		printf("magicSmoke: get_block_size(): %s with filename %s\n",strerror(errno),mfile);
+		exit(EXIT_FAILURE);
+	}
+	
+	free(mfile);
 	
 	return (int)stats.st_blksize;
 }
 
-bool make_file(char * file, unsigned int size) {
+unsigned long get_block_device_size(char * file) {
+	errno=0;
+	unsigned long size;
+	
+	int fp;
+	if (-1==(fp=open(file,O_RDONLY))) {
+		printf("magicSmoke: get_block_device_size(): %s with file %s\n",strerror(errno),file);
+		exit(EXIT_FAILURE);
+	}
+	
+	if (-1==ioctl(fp, BLKGETSIZE, &size)) {
+		printf("magicSmoke: get_block_device_size(): %s with filename %s\n",strerror(errno),file);
+		exit(EXIT_FAILURE);
+	}
+	
+	close(fp);
+	return size;
+
+}
+
+bool make_file(char * file, unsigned long size) {
 	errno=0;
 	
 	int fp;
-	if (-1==(fp=open(file, O_RDWR|O_CREAT|O_EXCL))) {
+	if (-1==(fp=open(file, O_RDWR|O_CREAT|O_EXCL, S_IRWXU|S_IRWXG|S_IRWXO))) {
 		printf("magicSmoke: make_file(): %s\n",strerror(errno));
+		exit(EXIT_FAILURE);
 	}
 	
 	int crand=0;
-	for (unsigned int i=0; i<size; i+=sizeof(int)) {
+	for (unsigned int i=0; i<size; i+=1) {
 		crand=rand();
-		if (-1==write(fp, &crand, sizeof(int))) {
+		if (-1==write(fp, &crand, 1)) {
 			printf("magicSmoke: make_file(): %s\nYou'll probably want to manually clean up test file %s\n",strerror(errno),file);
 			exit(EXIT_FAILURE);
 		}
 	}
 	
 	return true;
+}
+
+unsigned long get_random_offset(unsigned long filesize) {
+	//scale the random int form rand() into [0,filesize-1]
+	//this is not quite an evenmapping.  But assuming blocks are < 
+	// RAND_MAX it should at least give decent coverage
+	return rand() % (filesize - 1);
+}
+
+void calc_stats(unsigned long actions, unsigned int blocksize, int proc_time, time_t real_time) {
+	printf("%lu %u-byte blocks read in %f seconds proc time, %i real time\n", actions, blocksize, ((float)proc_time)/CLOCKS_PER_SEC, (int)real_time);
+	float bytes = actions*blocksize;
+	printf("%lu blocks/sec = %f B/sec = %f KB/sec = %f MB/sec",
+	actions/real_time, bytes/real_time, bytes/real_time / 1024, bytes/real_time/1024/1024);
+}
+
+//Dont forget - file size is in blocks!  We read/write with respect to blocks
+void do_reads(int fd, unsigned long count, unsigned int blocksize, unsigned long filesize) {
+	errno=0;
+	void *buffer = malloc(blocksize);
+	
+	if(!buffer) {
+		printf("magicSmoke: do_reads(): %s\n",strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	
+	printf("Beginning read cycle!\n");
+	
+	//record start time
+	int proc_time_s = clock();
+	struct timespec real_time_s;
+	clock_gettime(CLOCK_REALTIME, &real_time_s);
+	
+	for (unsigned long i=0; i<count; i++) {
+		lseek(fd, get_random_offset(filesize), SEEK_SET);
+		read(fd, buffer, blocksize);
+	}
+	
+	//record end time
+	int proc_time_f = clock();
+	time_t real_time_f = time(NULL);
+	
+	printf("Done read cycle\n");
+	
+	printf("Read statistics:\n");
+	calc_stats(count, blocksize, 
+		proc_time_f - proc_time_s,
+		0);
 }
 
 int main(int argc, char **argv) {
@@ -224,8 +298,9 @@ int main(int argc, char **argv) {
 	//parse out what permissions we want on the file when we open it
 	int perms = parse_perms(read,write);
 	
-	//represents the size of this file, as the FS sees it
+	//represents the size of this file, as the FS sees it.  In blocks
 	unsigned long realsize;
+	unsigned int blocksize;
 	//If using files, create file or fail
 	if (file_exists(file,perms)) {
 		if (!is_block_device(file)) {
@@ -235,29 +310,49 @@ int main(int argc, char **argv) {
 			//dont want to overwrite a file
 		}
 		//file is a block device.  We'll get size to use
-		//get_block_device_size(file);
-		
+		realsize = get_block_device_size(file);
+		blocksize = get_block_size(file);
 		//lets give a final chance to back out...
 		//last_chance();
 	} else {
 		//create a file
 		if (rawsize!=0) {
 			//use rawsize
-			realsize=rawsize;
+			realsize=rawsize / get_block_size(file);
 		} else {
 			//get system blocksize
-			realsize=get_block_size(file) * size;
+			realsize=size;
 		}
+		
+		blocksize = get_block_size(file);
+		
 		if (verbose)
-			printf("Writing %lu bytes to %s...",realsize,file);
-		//make_file(file, realsize);
+			printf("Writing %lu bytes to %s...\n",realsize * blocksize,file);
+		make_file(file, realsize * blocksize);
 		if (verbose)
 			printf(" Done!\n");
 	}
 	
+	if (verbose)
+		printf("Using file/disk of size %lu blocks with block size of %u bytes\n",realsize, blocksize);
 	//finally actually open our file
+	errno=0;
+	int fh;
+	if (-1==(fh=open(file, perms|O_SYNC|O_DIRECT))) {
+		printf("magicSmoke: %s\n", strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 	//mark already run time
+	
 	//Do random reads/writes
-	//calculate result for both real and process time
+	if (read)
+		do_reads(fh, actions, blocksize, realsize);
+	//if (write)
+	//	do_writes
+	
+	close(fh);
+	
+	//clean up if file was a created file
+	
 	return EXIT_SUCCESS;
 }
