@@ -254,8 +254,7 @@ void do_reads(int fd, unsigned long count, unsigned int blocksize, unsigned long
 	
 	//record start time
 	int proc_time_s = clock();
-	struct timespec real_time_s;
-	clock_gettime(CLOCK_REALTIME, &real_time_s);
+	time_t real_time_s = time(NULL);
 	
 	for (unsigned long i=0; i<count; i++) {
 		lseek(fd, get_random_offset(filesize), SEEK_SET);
@@ -271,7 +270,7 @@ void do_reads(int fd, unsigned long count, unsigned int blocksize, unsigned long
 	printf("Read statistics:\n");
 	calc_stats(count, blocksize, 
 		proc_time_f - proc_time_s,
-		0);
+		real_time_f - real_time_s);
 }
 
 int main(int argc, char **argv) {
