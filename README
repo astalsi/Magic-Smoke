@@ -1,1 +1,7 @@
-TODO: Convert timers to take advantage of clock_gettime
+Magic Smoke: A simple throughput test utility.
+
+BASIC IDEA:
+We want to test the throughput of the storage device.  So lets flood out the reads and writes as fast as we can.  However, some drives, especially physical disks (or those made by manufacturers who care more about statistics than real-world performance) have benefits if we try to do sequential read/writes.  So this throughput tester does randomized reads and writes.
+	We read/write entire blocks 9On the block boundaries, of course) in order to best simulate how the OS will treat IO from a block device.
+
+TODO: Convert this to use asynchronous IO (let the OS fetch things as fast as the kernel can manage)

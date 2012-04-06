@@ -25,7 +25,6 @@ void usage(void) {
 	printf("magicSmoke perfomrs operations in the file specified by file.  If file exists and is not a block device, magicSmoke fails.  If file does not exist, it is created\n");
 	printf("-r,--read	perform random reads\n");
 	printf("-w,--write	perform random writes\n");
-	printf("-b,--rwsize=#	do read/writes of # bytes [default: %lu]\n", sizeof(int));
 	printf("-s #,--size=#	if a file is created, make it of size blocks default 10.\n");
 	printf("-z #,--raw-size=#	if a file is created, make it of # bytes\n");
 	printf("-a # --actions=#	perform # reads/writes [default: %u]\n", UINT_MAX);
@@ -34,7 +33,7 @@ void usage(void) {
 
 void get_options(int argc, char **argv, bool *read, bool *write, 
 	unsigned int *size, unsigned int *rawsize, unsigned int  *actions, 
-	unsigned int *rwsize, char **file) {
+	char **file) {
 	
 	//give some reasonable defaults for things
 	*read=false;
@@ -42,7 +41,6 @@ void get_options(int argc, char **argv, bool *read, bool *write,
 	*actions=UINT_MAX;
 	*size=10;
 	*rawsize=0;
-	*rwsize=sizeof(int);
 	
 	//Set up options array
 	static struct option opts[] = {
@@ -52,7 +50,6 @@ void get_options(int argc, char **argv, bool *read, bool *write,
 		{"size",	required_argument,	0,		's'},
 		{"rawsize",	required_argument,	0,		'z'},
 		{"actions",	required_argument,	0,		'a'},
-		{"rwsize",	required_argument,	0,		'b'},
 		{"help",	no_argument,		0,		'h'},
 		{0,0,0,0}
 	};
@@ -87,9 +84,6 @@ void get_options(int argc, char **argv, bool *read, bool *write,
 			case 'a':
 				*actions=atoi(optarg);
 				break;
-			case 'b':
-				*rwsize=atoi(optarg);
-				break;
 			case '?':
 				break;
 			default:
@@ -107,8 +101,8 @@ void get_options(int argc, char **argv, bool *read, bool *write,
 	*file=argv[optind];
 	
 	if (verbose) {
-		printf("Arguments from getopt:\n\tVerbose: %i\n\tDo writes:%i\n\tDo reads: %i\n\tRead-Write size: %i bytes\n\tSize: %u blocks\n\tRawsize: %u bytes\n\tActions: %u\n\tFile: %s\n"
-		, verbose, (int)*write, (int)*read, *rwsize, *size, *rawsize, *actions,*file);
+		printf("Arguments from getopt:\n\tVerbose: %i\n\tDo writes:%i\n\tDo reads: %i\n\tSize: %u blocks\n\tRawsize: %u bytes\n\tActions: %u\n\tFile: %s\n"
+		, verbose, (int)*write, (int)*read, *size, *rawsize, *actions,*file);
 	}
 }
 
@@ -233,11 +227,62 @@ unsigned long get_random_offset(unsigned long filesize) {
 	return rand() % (filesize - 1);
 }
 
-void calc_stats(unsigned long actions, unsigned int blocksize, int proc_time, time_t real_time) {
-	printf("%lu %u-byte blocks read in %f seconds proc time, %i real time\n", actions, blocksize, ((float)proc_time)/CLOCKS_PER_SEC, (int)real_time);
-	float bytes = actions*blocksize;
-	printf("%lu blocks/sec = %f B/sec = %f KB/sec = %f MB/sec",
-	actions/real_time, bytes/real_time, bytes/real_time / 1024, bytes/real_time/1024/1024);
+//proc_time is in jiffies, we convert internally.  Yes, this is inconsistant
+void calc_stats(unsigned long actions, unsigned int blocksize, int proc_time, float real_time) {
+	printf("%lu %u-byte blocks read in:\n%f seconds proc time\n%f real time\n", actions, blocksize, ((float)proc_time)/CLOCKS_PER_SEC, real_time);
+	float baseb = ((float)actions/real_time)*blocksize;
+	printf("%f blocks/sec\n%f B/sec\n%f KB/sec\n%f MB/sec\n\n",
+	actions/real_time, baseb, baseb / 1024, baseb/1024/1024);
+}
+
+void last_chance() {
+	printf("***WARNING***\n\nWriting to a block device WILL DESTROY any data on the device.  Are you sure you want to do this? [y/N]:");
+	char c = getchar();
+	if (c!='y' && c!='Y') {
+		printf("Okay, exiting!\n");
+		exit(EXIT_SUCCESS);
+	}
+}
+
+//Dont forget - file size is in blocks!  We read/write with respect to blocks
+void do_writes(int fd, unsigned long count, unsigned int blocksize, unsigned long filesize) {
+	errno=0;
+	void *buffer = malloc(blocksize);
+	
+	if(!buffer) {
+		printf("magicSmoke: do_writes(): %s\n",strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	
+	printf("Beginning write cycle!\n");
+	
+	//record start time
+	int proc_time_s = clock();
+	
+	struct timespec starttime;
+	clock_gettime(CLOCK_REALTIME, &starttime);
+	//time_t real_time_s = time(NULL);
+	
+	for (unsigned long i=0; i<count; i++) {
+		lseek(fd, get_random_offset(filesize), SEEK_SET);
+		write(fd, buffer, blocksize);
+	}
+	
+	//record end time
+	int proc_time_f = clock();
+	struct timespec endtime;
+	clock_gettime(CLOCK_REALTIME, &endtime);
+	//time_t real_time_f = time(NULL);
+	
+	float real_time = endtime.tv_sec - starttime.tv_sec;
+	real_time += (endtime.tv_nsec - starttime.tv_nsec)/1000000000;
+	
+	printf("Done write cycle\n");
+	
+	printf("Read statistics:\n");
+	calc_stats(count, blocksize, 
+		proc_time_f - proc_time_s,
+		real_time);
 }
 
 //Dont forget - file size is in blocks!  We read/write with respect to blocks
@@ -254,7 +299,10 @@ void do_reads(int fd, unsigned long count, unsigned int blocksize, unsigned long
 	
 	//record start time
 	int proc_time_s = clock();
-	time_t real_time_s = time(NULL);
+	
+	struct timespec starttime;
+	clock_gettime(CLOCK_REALTIME, &starttime);
+	//time_t real_time_s = time(NULL);
 	
 	for (unsigned long i=0; i<count; i++) {
 		lseek(fd, get_random_offset(filesize), SEEK_SET);
@@ -263,14 +311,19 @@ void do_reads(int fd, unsigned long count, unsigned int blocksize, unsigned long
 	
 	//record end time
 	int proc_time_f = clock();
-	time_t real_time_f = time(NULL);
+	struct timespec endtime;
+	clock_gettime(CLOCK_REALTIME, &endtime);
+	//time_t real_time_f = time(NULL);
+	
+	float real_time = endtime.tv_sec - starttime.tv_sec;
+	real_time += (endtime.tv_nsec - starttime.tv_nsec)/1000000000;
 	
 	printf("Done read cycle\n");
 	
 	printf("Read statistics:\n");
 	calc_stats(count, blocksize, 
 		proc_time_f - proc_time_s,
-		real_time_f - real_time_s);
+		real_time);
 }
 
 int main(int argc, char **argv) {
@@ -281,11 +334,10 @@ int main(int argc, char **argv) {
 	unsigned int size;
 	unsigned int rawsize;
 	unsigned int actions;
-	unsigned int rwsize;
 	char *file=NULL;
 	//Parse arguments
 	get_options(argc, argv, &read, &write, &size, &rawsize,
-		&actions, &rwsize, &file);
+		&actions, &file);
 	
 	//do some sanity checks
 	if (!(read || write)) {
@@ -312,7 +364,8 @@ int main(int argc, char **argv) {
 		realsize = get_block_device_size(file);
 		blocksize = get_block_size(file);
 		//lets give a final chance to back out...
-		//last_chance();
+		if (write)
+			last_chance();
 	} else {
 		//create a file
 		if (rawsize!=0) {
@@ -346,8 +399,8 @@ int main(int argc, char **argv) {
 	//Do random reads/writes
 	if (read)
 		do_reads(fh, actions, blocksize, realsize);
-	//if (write)
-	//	do_writes
+	if (write)
+		do_writes(fh, actions, blocksize, realsize);
 	
 	close(fh);
 	
