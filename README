@@ -3,5 +3,32 @@ Magic Smoke: A simple throughput test utility.
 BASIC IDEA:
 We want to test the throughput of the storage device.  So lets flood out the reads and writes as fast as we can.  However, some drives, especially physical disks (or those made by manufacturers who care more about statistics than real-world performance) have benefits if we try to do sequential read/writes.  So this throughput tester does randomized reads and writes.
 	We read/write entire blocks 9On the block boundaries, of course) in order to best simulate how the OS will treat IO from a block device.
+	
+Sample usage:
+
+$ ./magicSmoke -rwa 10000000 ~/testmagic
+
+Beginning read cycle!
+Done read cycle
+Read statistics:
+10000000 4096-byte blocks read in:
+19.549999 seconds proc time
+20.000000 real time
+500000.000000 blocks/sec
+2048000000.000000 B/sec
+2000000.000000 KB/sec
+1953.125000 MB/sec
+
+Beginning write cycle!
+Done write cycle
+Write statistics:
+10000000 4096-byte blocks read in:
+35.230000 seconds proc time
+35.000000 real time
+285714.281250 blocks/sec
+1170285696.000000 B/sec
+1142857.125000 KB/sec
+1116.071411 MB/sec
+
 
 TODO: Convert this to use asynchronous IO (let the OS fetch things as fast as the kernel can manage)

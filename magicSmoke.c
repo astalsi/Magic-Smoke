@@ -279,7 +279,7 @@ void do_writes(int fd, unsigned long count, unsigned int blocksize, unsigned lon
 	
 	printf("Done write cycle\n");
 	
-	printf("Read statistics:\n");
+	printf("Write statistics:\n");
 	calc_stats(count, blocksize, 
 		proc_time_f - proc_time_s,
 		real_time);
@@ -405,6 +405,12 @@ int main(int argc, char **argv) {
 	close(fh);
 	
 	//clean up if file was a created file
+	if (!is_block_device(file)) {
+		errno=0;
+		if (-1==remove(file)) {
+			printf("Failed to remove %s! You'll probably want to manually clean this up.\n",file);
+		}
+	}
 	
 	return EXIT_SUCCESS;
 }
